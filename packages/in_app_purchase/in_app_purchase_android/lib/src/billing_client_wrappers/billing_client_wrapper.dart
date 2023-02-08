@@ -144,7 +144,7 @@ class BillingClient {
     };
     return SkuDetailsResponseWrapper.fromJson((await channel.invokeMapMethod<
                 String, dynamic>(
-            'BillingClient#querySkuDetailsAsync(SkuDetailsParams, SkuDetailsResponseListener)',
+            'BillingClient#queryProductDetailsAsync(QueryProductDetailsParams, ProductDetailsResponseListener)',
             arguments)) ??
         <String, dynamic>{});
   }

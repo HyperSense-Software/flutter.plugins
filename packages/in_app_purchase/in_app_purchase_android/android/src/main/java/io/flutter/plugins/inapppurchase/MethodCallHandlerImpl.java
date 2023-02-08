@@ -25,10 +25,13 @@ import com.android.billingclient.api.BillingResult;
 import com.android.billingclient.api.ConsumeParams;
 import com.android.billingclient.api.ConsumeResponseListener;
 import com.android.billingclient.api.PriceChangeFlowParams;
+import com.android.billingclient.api.ProductDetails;
+import com.android.billingclient.api.ProductDetailsResponseListener;
 import com.android.billingclient.api.Purchase;
 import com.android.billingclient.api.PurchaseHistoryRecord;
 import com.android.billingclient.api.PurchaseHistoryResponseListener;
 import com.android.billingclient.api.PurchasesResponseListener;
+import com.android.billingclient.api.QueryProductDetailsParams;
 import com.android.billingclient.api.QueryPurchaseHistoryParams;
 import com.android.billingclient.api.QueryPurchasesParams;
 import com.android.billingclient.api.SkuDetails;
@@ -39,6 +42,8 @@ import io.flutter.plugin.common.MethodChannel;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import com.google.common.collect.ImmutableList;
+import java.util.ArrayList;
 
 /** Handles method channel for the plugin. */
 class MethodCallHandlerImpl
@@ -55,7 +60,7 @@ class MethodCallHandlerImpl
   private final Context applicationContext;
   private final MethodChannel methodChannel;
 
-  private HashMap<String, SkuDetails> cachedSkus = new HashMap<>();
+  private HashMap<String, ProductDetails> cachedSkus = new HashMap<>();
 
   /** Constructs the MethodCallHandlerImpl */
   MethodCallHandlerImpl(
@@ -192,21 +197,40 @@ class MethodCallHandlerImpl
       return;
     }
 
-    SkuDetailsParams params =
-        SkuDetailsParams.newBuilder().setType(skuType).setSkusList(skusList).build();
-    billingClient.querySkuDetailsAsync(
-        params,
-        new SkuDetailsResponseListener() {
-          @Override
-          public void onSkuDetailsResponse(
-              BillingResult billingResult, List<SkuDetails> skuDetailsList) {
-            updateCachedSkus(skuDetailsList);
-            final Map<String, Object> skuDetailsResponse = new HashMap<>();
-            skuDetailsResponse.put("billingResult", Translator.fromBillingResult(billingResult));
-            skuDetailsResponse.put("skuDetailsList", fromSkuDetailsList(skuDetailsList));
-            result.success(skuDetailsResponse);
-          }
-        });
+    List<QueryProductDetailsParams.Product> products = new ArrayList<>();
+    List<String> productIds = new ArrayList<>();
+
+    for (String sku : skusList) {
+        QueryProductDetailsParams.Product product = QueryProductDetailsParams.Product.newBuilder()
+                .setProductId(sku)
+                .setProductType(BillingClient.ProductType.SUBS)
+                .build();
+
+        if(!productIds.contains(sku)){
+
+          products.add(product);
+          productIds.add(sku);
+        }
+
+    }
+
+    QueryProductDetailsParams queryProductDetailsParams =
+            QueryProductDetailsParams.newBuilder()
+                    .setProductList(products)
+                    .build();
+
+
+    billingClient.queryProductDetailsAsync(
+            queryProductDetailsParams,
+            (billingResult, productDetailsList) -> {
+              updateCachedSkus(productDetailsList);
+              final Map<String, Object> skuDetailsResponse = new HashMap<>();
+              skuDetailsResponse.put("billingResult", Translator.fromBillingResult(billingResult));
+              skuDetailsResponse.put("skuDetailsList", fromSkuDetailsList(productDetailsList));
+              result.success(skuDetailsResponse);
+              return;
+            }
+    );
   }
 
   private void launchBillingFlow(
@@ -220,7 +244,7 @@ class MethodCallHandlerImpl
     if (billingClientError(result)) {
       return;
     }
-    SkuDetails skuDetails = cachedSkus.get(sku);
+    ProductDetails skuDetails = cachedSkus.get(sku);
     if (skuDetails == null) {
       result.error(
           "NOT_FOUND",
@@ -257,9 +281,16 @@ class MethodCallHandlerImpl
           null);
       return;
     }
+    ImmutableList<BillingFlowParams.ProductDetailsParams> productDetailsParamsList =
+            ImmutableList.of(
+                    BillingFlowParams.ProductDetailsParams.newBuilder()
+                            .setProductDetails(skuDetails)
+                            .setOfferToken(skuDetails.getSubscriptionOfferDetails().get(0).getOfferToken())
+                            .build()
+            );
 
     BillingFlowParams.Builder paramsBuilder =
-        BillingFlowParams.newBuilder().setSkuDetails(skuDetails);
+            BillingFlowParams.newBuilder().setProductDetailsParamsList(productDetailsParamsList);
     if (accountId != null && !accountId.isEmpty()) {
       paramsBuilder.setObfuscatedAccountId(accountId);
     }
@@ -401,13 +432,13 @@ class MethodCallHandlerImpl
         });
   }
 
-  private void updateCachedSkus(@Nullable List<SkuDetails> skuDetailsList) {
+  private void updateCachedSkus(@Nullable List<ProductDetails> skuDetailsList) {
     if (skuDetailsList == null) {
       return;
     }
 
-    for (SkuDetails skuDetails : skuDetailsList) {
-      cachedSkus.put(skuDetails.getSku(), skuDetails);
+    for (ProductDetails skuDetails : skuDetailsList) {
+      cachedSkus.put(skuDetails.getProductId(), skuDetails);
     }
   }
 
@@ -428,7 +459,7 @@ class MethodCallHandlerImpl
     // is handled by the `billingClientError()` call.
     assert billingClient != null;
 
-    SkuDetails skuDetails = cachedSkus.get(sku);
+    ProductDetails skuDetails = cachedSkus.get(sku);
     if (skuDetails == null) {
       result.error(
           "NOT_FOUND",
@@ -438,15 +469,6 @@ class MethodCallHandlerImpl
           null);
       return;
     }
-
-    PriceChangeFlowParams params =
-        new PriceChangeFlowParams.Builder().setSkuDetails(skuDetails).build();
-    billingClient.launchPriceChangeConfirmationFlow(
-        activity,
-        params,
-        billingResult -> {
-          result.success(Translator.fromBillingResult(billingResult));
-        });
   }
 
   private boolean billingClientError(MethodChannel.Result result) {
